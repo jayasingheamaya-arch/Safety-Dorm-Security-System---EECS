@@ -1,0 +1,197 @@
+// Pin numbers
+int trigPin = 17;
+int echoPin = 14;
+int gasPin = 28;
+int buzzerPin = 10;
+int redButton = 13;
+int blueButton = 12;
+int whiteLed = 0;
+int redLed = 1;
+int blueLed = 2;
+int yellowLed = 3;
+
+void loop() {
+
+  //INPUT SECTION 
+
+  // Check if Java sent a command
+  if (Serial.available() > 0) {
+    String command = Serial.readStringUntil('\n'); // read message until end of line
+    command.trim(); // remove spaces or hidden characters
+
+    // ignore empty commands
+    if (command.length() == 0) {
+      // skip
+    }
+    else if (command == "NIGHT_ON") {
+      nightMode = true;
+      Serial.println("MSG:Night mode turned on from Java");
+    }
+    else if (command == "NIGHT_OFF") {
+      nightMode = false;
+      Serial.println("MSG:Night mode turned off from Java");
+    }
+    else if (command == "RESET_ALARM1") {
+      alarm1 = false;
+      Serial.println("MSG:Alarm 1 reset from Java");
+    }
+    else if (command == "RESET_ALARM2") {
+      alarm2 = false;
+      Serial.println("MSG:Alarm 2 reset from Java");
+    }
+    else {
+      // unknown command received (log it but don't act on it)
+      Serial.print("MSG:Unknown command ignored: ");
+      Serial.println(command);
+    }
+  }
+
+  // read gas level (0 to 4095)
+  int gasValue = analogRead(gasPin);
+  // ensures reading is within real range
+  bool gasReadValid = (gasValue >= 0 && gasValue <= 4095);
+
+  // read distance sensor (only in night mode)
+  float distance = -1; // -1 means no reading (failed)
+
+  // only check distance if night mode is on
+  if (nightMode == true) {
+    digitalWrite(trigPin, LOW); // clear the trigger
+    delayMicroseconds(2);
+    digitalWrite(trigPin, HIGH); // send a 10-microsecond pulse
+    delayMicroseconds(10);
+    digitalWrite(trigPin, LOW);
+
+    // timeout of 30000us (~30ms) prevents indefinite blocking
+    float duration = pulseIn(echoPin, HIGH, 30000);
+
+    if (duration == 0) {
+      // pulseIn timed out, sensor may be disconnected or out of range
+      distance = -1;
+      Serial.println("MSG:Ultrasonic sensor timeout - no echo received");
+    } else {
+      distance = (duration * 0.0343) / 2; // converts time into centimeters
+    }
+  }
+
+  // blue button toggles night mode, with proper state-change debounce
+  bool currentBlueState = digitalRead(blueButton);
+
+  // DECISION SECTION
+
+  // --- Night mode toggle ---
+  if (currentBlueState == LOW && lastBlueState == HIGH) {
+    // only fires once per press, on the falling edge
+    if (nightMode == false) {
+      nightMode = true;
+      Serial.println("MSG:Night mode ON");
+    } else {
+      nightMode = false;
+      Serial.println("MSG:Night mode OFF");
+    }
+  }
+  lastBlueState = currentBlueState; // update memory for next loop
+
+  // Red button logic
+  // short click (less than 1 second) = reset alarm 1
+  // hold for 1 second or more = reset alarm 2
+  if (digitalRead(redButton) == LOW) {
+    // record start time when button is first pressed
+    if (redPressTime == 0) {
+      redPressTime = millis();
+    }
+  } else {
+    // button was just released
+    if (redPressTime != 0) {
+      long holdTime = millis() - redPressTime; // calculate how long it was held
+
+      if (holdTime >= 1000) {
+        // held for 1 second or more - reset alarm 2
+        if (alarm2 == true) {
+          alarm2 = false;
+          Serial.println("MSG:Alarm 2 reset by hold");
+        }
+      } else if (holdTime >= 50) {
+        // short click (but at least 50ms to filter out noise) - reset alarm 1
+        if (alarm1 == true) {
+          alarm1 = false;
+          Serial.println("MSG:Alarm 1 reset by click");
+        }
+      }
+
+      redPressTime = 0; // reset the timer
+    }
+  }
+
+  // Alarm triggers 
+  // trigger alarm 1 only if gas read is valid and above threshold
+  if (gasReadValid && gasValue > 140) {
+    alarm1 = true;
+  }
+
+  // trigger alarm 2 only if distance read is valid (not -1) and in range
+  if (nightMode == true && distance > 4.5 && distance < 400) {
+    alarm2 = true;
+  }
+
+  // STATE SECTION 
+
+
+  // figure out current state name
+  String state = "Normal";
+  if (alarm1 == true) state = "Alarm1";
+  else if (alarm2 == true) state = "Alarm2";
+  else if (nightMode == true) state = "Night";
+
+  // OUTPUT SECTION 
+
+  // display sensor data to user
+  Serial.print("GAS:");
+  Serial.println(gasValue);
+  Serial.print("DIST:");
+  Serial.println(distance);
+  Serial.print("STATE:");
+  Serial.println(state);
+
+  // alarm 1 - gas alarm
+  if (alarm1 == true) {
+    digitalWrite(whiteLed, HIGH);
+    digitalWrite(redLed, HIGH);
+    digitalWrite(blueLed, HIGH);
+    digitalWrite(yellowLed, LOW);
+    digitalWrite(buzzerPin, HIGH);
+  }
+
+  // alarm 2 - motion alarm (blinking)
+  else if (alarm2 == true) {
+    digitalWrite(whiteLed, HIGH);
+    digitalWrite(redLed, HIGH);
+    digitalWrite(blueLed, HIGH);
+    digitalWrite(yellowLed, LOW);
+    digitalWrite(buzzerPin, HIGH);
+    delay(150);
+    digitalWrite(redLed, LOW);
+    digitalWrite(blueLed, LOW);
+    digitalWrite(buzzerPin, LOW);
+  }
+
+  // night mode
+  else if (nightMode == true) {
+    digitalWrite(whiteLed, LOW);
+    digitalWrite(yellowLed, HIGH);
+    digitalWrite(redLed, LOW);
+    digitalWrite(blueLed, LOW);
+    digitalWrite(buzzerPin, LOW);
+  }
+
+  // normal mode
+  else {
+    digitalWrite(whiteLed, HIGH);
+    digitalWrite(yellowLed, LOW);
+    digitalWrite(redLed, LOW);
+    digitalWrite(blueLed, LOW);
+    digitalWrite(buzzerPin, LOW);
+  }
+
+  delay(300);
+}
